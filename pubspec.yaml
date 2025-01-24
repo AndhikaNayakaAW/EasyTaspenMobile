@@ -1,0 +1,40 @@
+name: mobileapp
+description: "A new Flutter project."
+
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '^3.5.3'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  intl: ^0.17.0
+  # Add the http package:
+  http: ^0.13.5
+  file_picker: ^5.0.1
+  google_fonts: ^4.0.3
+  firebase_auth: ^4.4.0
+  flutter_secure_storage: ^5.0.2
+  uuid: ^3.0.6 # Add this line
+  pdf: ^3.11.0
+  printing: ^5.10.0
+
+
+  cupertino_icons: ^1.0.8
+  flutter_dotenv: ^5.2.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/images/easylogo.jpg
+    - assets/images/logintaspen.jpg
+
+
