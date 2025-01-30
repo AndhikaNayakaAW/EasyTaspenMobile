@@ -15,6 +15,9 @@ import 'package:mobileapp/widgets/custom_bottom_app_bar.dart';
 import 'package:intl/intl.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+// Import dropdown_search for searchable dropdowns
+import 'package:dropdown_search/dropdown_search.dart';
+
 class CreateDutyForm extends StatefulWidget {
   /// If non-null, we're editing an existing duty.
   final Duty? dutyToEdit;
@@ -165,15 +168,14 @@ class CreateDutyFormState extends State<CreateDutyForm> {
           _selectedTransport = duty.transport; // "1" or "2"
 
           // If the duty was previously rejected, set the reason if available
-          // (Assuming you'd store that somewhere in duty or detailData)
-          // _rejectionReason = ???
+          // (Adjust if your API provides the reason differently)
+          // e.g.: _rejectionReason = detailData.rejectionReason ?? "";
 
           // Petugas array from the detail (list of NIKs)
-          // We assume the server might return "4163" or "00004163". 
-          // We'll pad to 8 digits to match the employee list which might be "00004163".
+          // We assume the server might return "4163" or "00004163".
+          // We'll pad to 8 digits to match the employee list if it uses "00004163".
           if (detailData.petugas != null && detailData.petugas!.isNotEmpty) {
             _employeeDuties = detailData.petugas!.map((rawNik) {
-              // re-pad to 8 digits
               final paddedNik = rawNik.padLeft(8, '0');
               final employeeName = _employeeList[paddedNik] ?? paddedNik;
               return EmployeeDuty(
@@ -483,7 +485,7 @@ class CreateDutyFormState extends State<CreateDutyForm> {
     });
   }
 
-  /// Renders a single employee row with a dropdown & remove button
+  /// Renders a single employee row with a *searchable* dropdown & remove button
   Widget _buildEmployeeRow(int index) {
     final employeeDuty = _employeeDuties[index];
 
@@ -495,35 +497,42 @@ class CreateDutyFormState extends State<CreateDutyForm> {
         padding: const EdgeInsets.all(20.0),
         child: Row(
           children: [
+            // Use DropdownSearch for employee selection
             Expanded(
-              child: DropdownButtonFormField<String>(
-                isExpanded: true,
-                value: employeeDuty.employeeId.isEmpty
-                    ? null
-                    : employeeDuty.employeeId,
-                items: _employeeList.entries.map((entry) {
-                  return DropdownMenuItem<String>(
-                    value: entry.key,
-                    child: Text(entry.value),
-                  );
-                }).toList(),
-                onChanged: isRejected
-                    ? null
-                    : (value) {
-                        setState(() {
-                          final employeeName = _employeeList[value] ?? "";
-                          _employeeDuties[index] = EmployeeDuty(
-                            employeeId: value ?? "",
-                            employeeName: employeeName,
-                          );
-                        });
-                      },
-                decoration: const InputDecoration(
-                  labelText: "Select Employee",
-                  border: OutlineInputBorder(),
-                  contentPadding:
-                      EdgeInsets.symmetric(horizontal: 12.0, vertical: 16.0),
+              child: DropdownSearch<String>(
+                items: _employeeList.values.toList(),
+                selectedItem: employeeDuty.employeeName.isNotEmpty
+                    ? employeeDuty.employeeName
+                    : null,
+                enabled: !isRejected,
+                dropdownDecoratorProps: const DropDownDecoratorProps(
+                  dropdownSearchDecoration: InputDecoration(
+                    labelText: "Search or Select Employee",
+                    border: OutlineInputBorder(),
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 12.0,
+                      vertical: 16.0,
+                    ),
+                  ),
                 ),
+                popupProps: const PopupProps.menu(
+                  showSearchBox: true,
+                ),
+                onChanged: (String? name) {
+                  if (name != null) {
+                    // Find the matching key from _employeeList
+                    final matchedEntry = _employeeList.entries.firstWhere(
+                      (e) => e.value == name,
+                      orElse: () => const MapEntry("", ""),
+                    );
+                    setState(() {
+                      _employeeDuties[index] = EmployeeDuty(
+                        employeeId: matchedEntry.key,
+                        employeeName: matchedEntry.value,
+                      );
+                    });
+                  }
+                },
               ),
             ),
             const SizedBox(width: 10),
@@ -711,34 +720,44 @@ class CreateDutyFormState extends State<CreateDutyForm> {
                           ),
                         const SizedBox(height: 20),
 
-                        // -------- APPROVER --------
+                        // -------- APPROVER (SEARCHABLE) --------
                         Align(
                           alignment: Alignment.centerLeft,
                           child: Text("Approver:", style: _labelStyle),
                         ),
                         const SizedBox(height: 8),
-                        DropdownButtonFormField<String>(
-                          isExpanded: true,
-                          value: _selectedApproverId,
-                          items: _approverList.entries.map((entry) {
-                            return DropdownMenuItem<String>(
-                              value: entry.key,
-                              child: Text(entry.value),
-                            );
-                          }).toList(),
-                          onChanged: isRejected
-                              ? null
-                              : (value) {
-                                  setState(() {
-                                    _selectedApproverId = value;
-                                  });
-                                },
-                          decoration: const InputDecoration(
-                            labelText: "Select Approver",
-                            border: OutlineInputBorder(),
-                            contentPadding:
-                                EdgeInsets.symmetric(horizontal: 12.0),
+                        DropdownSearch<String>(
+                          items: _approverList.values.toList(),
+                          selectedItem: (_selectedApproverId != null &&
+                                  _approverList[_selectedApproverId!] != null)
+                              ? _approverList[_selectedApproverId!]
+                              : null,
+                          enabled: !isRejected,
+                          dropdownDecoratorProps: const DropDownDecoratorProps(
+                            dropdownSearchDecoration: InputDecoration(
+                              labelText: "Search or Select Approver",
+                              border: OutlineInputBorder(),
+                              contentPadding: EdgeInsets.symmetric(
+                                horizontal: 12.0,
+                                vertical: 16.0,
+                              ),
+                            ),
                           ),
+                          popupProps: const PopupProps.menu(
+                            showSearchBox: true,
+                          ),
+                          onChanged: (String? name) {
+                            if (name != null) {
+                              // Find the matching key from _approverList
+                              final matchedEntry = _approverList.entries.firstWhere(
+                                (e) => e.value == name,
+                                orElse: () => const MapEntry("", ""),
+                              );
+                              setState(() {
+                                _selectedApproverId = matchedEntry.key;
+                              });
+                            }
+                          },
                         ),
                         const SizedBox(height: 20),
 
@@ -766,8 +785,9 @@ class CreateDutyFormState extends State<CreateDutyForm> {
                                   ? "Select Date"
                                   : DateFormat('dd-MM-yyyy')
                                       .format(_selectedDutyDate!),
-                              style:
-                                  _inputStyle.copyWith(color: Colors.teal.shade800),
+                              style: _inputStyle.copyWith(
+                                color: Colors.teal.shade800,
+                              ),
                             ),
                           ),
                         ),
@@ -805,7 +825,8 @@ class CreateDutyFormState extends State<CreateDutyForm> {
                                             ? "HH:MM"
                                             : _formatTime(_startTime),
                                         style: _inputStyle.copyWith(
-                                            color: Colors.teal.shade800),
+                                          color: Colors.teal.shade800,
+                                        ),
                                       ),
                                     ),
                                   ),
@@ -856,7 +877,8 @@ class CreateDutyFormState extends State<CreateDutyForm> {
                                             ? "HH:MM"
                                             : _formatTime(_endTime),
                                         style: _inputStyle.copyWith(
-                                            color: Colors.teal.shade800),
+                                          color: Colors.teal.shade800,
+                                        ),
                                       ),
                                     ),
                                   ),
@@ -1043,7 +1065,9 @@ class CreateDutyFormState extends State<CreateDutyForm> {
               onSurface: Colors.teal,
             ),
             textButtonTheme: TextButtonThemeData(
-              style: TextButton.styleFrom(foregroundColor: Colors.teal),
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.teal,
+              ),
             ),
           ),
           child: child!,

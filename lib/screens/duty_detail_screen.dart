@@ -18,6 +18,8 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'dart:typed_data';
+// For loading the Taspen logo asset:
+import 'package:flutter/services.dart' show rootBundle;
 
 import 'create_duty_form.dart';
 import 'main_screen.dart';
@@ -44,7 +46,8 @@ class _DutyDetailScreenState extends State<DutyDetailScreen> {
   // Future for the Duty Detail data
   late Future<DutyDetailData> _dutyDetailDataFuture;
 
-  // Fallback employees map from `/duty/create`, which can contain both zero-padded and stripped keys
+  // Fallback employees map from `/duty/create`,
+  // containing both zero-padded and stripped keys
   Map<String, String> _employeesMap = {};
 
   @override
@@ -52,7 +55,7 @@ class _DutyDetailScreenState extends State<DutyDetailScreen> {
     super.initState();
     // 1) Fetch duty detail
     _dutyDetailDataFuture = fetchDutyDetailData(widget.dutyId);
-    // 2) Also load global employees map from /duty/create
+    // 2) Load global employees map
     _loadEmployeeMap();
   }
 
@@ -77,13 +80,12 @@ class _DutyDetailScreenState extends State<DutyDetailScreen> {
   Future<void> _loadEmployeeMap() async {
     try {
       final user = await _authService.loadUserInfo();
-      // fetchEmployeesForCreateDuty merges zero-padded + stripped versions
       final employees = await _apiService.fetchEmployeesForCreateDuty(
         nik: user.nik,
         orgeh: user.orgeh,
         ba: user.ba,
       );
-      if (!mounted) return; // Avoid setState if widget is disposed
+      if (!mounted) return;
       setState(() {
         _employeesMap = employees;
       });
@@ -93,7 +95,6 @@ class _DutyDetailScreenState extends State<DutyDetailScreen> {
   }
 
   // ------------------- UI ACTIONS -------------------
-  /// Edit duty => open CreateDutyForm
   void _onEdit(Duty duty) async {
     final result = await Navigator.push(
       context,
@@ -102,7 +103,7 @@ class _DutyDetailScreenState extends State<DutyDetailScreen> {
       ),
     );
 
-    // If user updated or sent the duty, re-fetch the detail
+    // If user updated or sent the duty, re-fetch
     if (result != null &&
         (result == 'sent' || result == 'updated' || result == 'saved')) {
       if (!mounted) return;
@@ -112,13 +113,11 @@ class _DutyDetailScreenState extends State<DutyDetailScreen> {
     }
   }
 
-  /// Send duty => change from draft/returned to waiting
   void _onSend(Duty duty) async {
     try {
       final user = await _authService.loadUserInfo();
       if (!mounted) return;
 
-      // Minimal request body to transition from "draft"/"returned" to "waiting"
       final Map<String, dynamic> requestBody = {
         'submit': 'submit',
         'nik': user.nik,
@@ -155,7 +154,6 @@ class _DutyDetailScreenState extends State<DutyDetailScreen> {
     }
   }
 
-  /// Delete duty
   void _onDelete(Duty duty) async {
     showDialog(
       context: context,
@@ -172,7 +170,7 @@ class _DutyDetailScreenState extends State<DutyDetailScreen> {
               try {
                 final response = await _apiService.deleteDuty(duty.id);
                 if (!mounted) return;
-                Navigator.pop(ctx); 
+                Navigator.pop(ctx);
                 if (response.metadata.code == 200) {
                   Navigator.pop(context, 'deleted');
                   if (!mounted) return;
@@ -219,176 +217,259 @@ class _DutyDetailScreenState extends State<DutyDetailScreen> {
     }
   }
 
+  /// EXACT PDF MODEL from your snippet,
+  /// but with the same name-lookup logic used in duty details
   Future<Uint8List> _generatePdf(
     PdfPageFormat format,
     DutyDetailData dutyDetailData,
   ) async {
     final pdf = pw.Document();
-    final user = dutyDetailData.user;
-    final dutyDetail = dutyDetailData.dutyDetail;
-    final duty = dutyDetail.duty;
-    final approval = dutyDetail.approver;
 
+    // Load Taspen Logo
+    final logoData = await rootBundle.load('assets/images/taspenlogo.jpg');
+    final Uint8List logoBytes = logoData.buffer.asUint8List();
+
+    // Extract details
+    final user = dutyDetailData.user;            // The Maker (logged in)
+    final detail = dutyDetailData.dutyDetail;
+    final duty = detail.duty;
+    final approval = detail.approver;
+
+    // -------------- NAME LOOKUP (same as _buildPetugasSection) --------------
+    String _employeeNameForPdf(String rawNik) {
+      final strippedNik = rawNik.replaceFirst(RegExp(r'^0+'), '');
+
+      // 1) Check dutyDetail's local map (employeeList)
+      final fromDetail = detail.employeeList[strippedNik] ??
+          detail.employeeList[rawNik];
+      if (fromDetail != null) return fromDetail;
+
+      // 2) If null, fallback to the globally fetched map
+      final fromGlobal = _employeesMap[strippedNik] ?? _employeesMap[rawNik];
+      return fromGlobal ?? "Unknown";
+    }
+
+    // Approver name uses dutyDetail.approverList => fallback to _employeesMap
+    String _approverNameForPdf(String rawNik) {
+      final strippedNik = rawNik.replaceFirst(RegExp(r'^0+'), '');
+
+      // 1) Check dutyDetail.approverList
+      final fromDetail = detail.approverList[strippedNik] ??
+          detail.approverList[rawNik];
+      if (fromDetail != null) return fromDetail;
+
+      // 2) Fallback to global
+      final fromGlobal = _employeesMap[strippedNik] ?? _employeesMap[rawNik];
+      return fromGlobal ?? "Unknown Approver";
+    }
+
+    // We want the final "approver name" in the signature
     final approverName = (approval != null)
-        ? _getApproverName(approval.nik, dutyDetail.approverList)
-        : "Unknown";
+        ? _approverNameForPdf(approval.nik)
+        : "Unknown Approver";
 
-    final creatorName = user.nama ?? "Unknown Creator";
-    final creatorNik = user.nik;
-    final creatorPosition = user.jabatan ?? "Unknown Position";
-    final rejectionReason = approval?.note ?? "";
+    // Format date/time
+    String _formatDate(String dateStr) {
+      try {
+        final parsedDate = DateTime.parse(dateStr);
+        return DateFormat('dd-MM-yyyy').format(parsedDate);
+      } catch (e) {
+        return dateStr;
+      }
+    }
 
+    String _formatTime(String timeStr) {
+      try {
+        final parsedTime = DateTime.parse("1970-01-01T$timeStr");
+        return DateFormat('HH:mm:ss').format(parsedTime);
+      } catch (e) {
+        return timeStr;
+      }
+    }
+
+    // Create the PDF
     pdf.addPage(
       pw.Page(
         pageFormat: format,
-        build: (ctx) => pw.Padding(
-          padding: const pw.EdgeInsets.all(24),
-          child: pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.start,
-            children: [
-              pw.Text(
-                'Duty Details',
-                style: pw.TextStyle(
-                  fontSize: 24,
-                  fontWeight: pw.FontWeight.bold,
-                ),
-              ),
-              pw.SizedBox(height: 20),
-              pw.Text(
-                'Description: ${duty.description ?? "No Description"}',
-                style: const pw.TextStyle(fontSize: 18),
-              ),
-              pw.SizedBox(height: 10),
-              pw.Text(
-                'Date: ${_formatDate(duty.dutyDate.toIso8601String())}',
-                style: const pw.TextStyle(fontSize: 16),
-              ),
-              pw.Text(
-                'Time: ${_formatTime(duty.startTime)} - ${_formatTime(duty.endTime)}',
-                style: const pw.TextStyle(fontSize: 16),
-              ),
-              pw.SizedBox(height: 20),
-
-              if (dutyDetail.petugas != null && dutyDetail.petugas!.isNotEmpty)
-                ...[
-                  pw.Text(
-                    'Employee on Duty:',
-                    style: pw.TextStyle(
-                      fontSize: 16,
-                      fontWeight: pw.FontWeight.bold,
+        build: (pw.Context context) {
+          return pw.Padding(
+            padding: const pw.EdgeInsets.all(32),
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                // Logo & Title
+                pw.Row(
+                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                  children: [
+                    pw.Image(pw.MemoryImage(logoBytes), width: 100),
+                    pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.center,
+                      children: [
+                        pw.Text(
+                          "PT TASPEN (PERSERO)",
+                          style: pw.TextStyle(
+                            fontWeight: pw.FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
+                        pw.SizedBox(height: 5),
+                        pw.Text(
+                          "SURAT PERINTAH TUGAS",
+                          style: pw.TextStyle(
+                            fontWeight: pw.FontWeight.bold,
+                            fontSize: 16,
+                          ),
+                        ),
+                        pw.SizedBox(height: 5),
+                        pw.Text(
+                          "No: ___________",
+                          style: pw.TextStyle(fontSize: 12),
+                        ),
+                      ],
                     ),
-                  ),
-                  pw.SizedBox(height: 8),
-                  for (int i = 0; i < dutyDetail.petugas!.length; i++)
-                    pw.Text(
-                      '${i + 1}. '
-                      '${_getEmployeeName(dutyDetail.petugas![i], dutyDetail.employeeList)} '
-                      '(${dutyDetail.petugas![i]})',
-                      style: const pw.TextStyle(fontSize: 14),
-                    ),
-                  pw.SizedBox(height: 16),
-                ],
-
-              pw.Divider(),
-              pw.SizedBox(height: 20),
-              pw.Text(
-                'Created:',
-                style: pw.TextStyle(
-                  fontWeight: pw.FontWeight.bold,
-                  color: PdfColors.grey700,
-                  fontSize: 16,
+                    pw.SizedBox(width: 100), // alignment
+                  ],
                 ),
-              ),
-              pw.Text(
-                _formatDateTime(duty.createdAt),
-                style: const pw.TextStyle(fontSize: 14),
-              ),
-              pw.SizedBox(height: 16),
-              pw.Text(
-                'Modified:',
-                style: pw.TextStyle(
-                  fontWeight: pw.FontWeight.bold,
-                  color: PdfColors.grey700,
-                  fontSize: 16,
-                ),
-              ),
-              pw.Text(
-                _formatDateTime(duty.updatedAt),
-                style: const pw.TextStyle(fontSize: 14),
-              ),
-              pw.SizedBox(height: 20),
-              pw.Divider(),
-              pw.SizedBox(height: 20),
-
-              pw.Text(
-                'Created By:',
-                style: pw.TextStyle(
-                  fontWeight: pw.FontWeight.bold,
-                  fontSize: 16,
-                ),
-              ),
-              pw.Text(
-                'Name: $creatorName',
-                style: const pw.TextStyle(fontSize: 16),
-              ),
-              pw.Text(
-                'NIK: $creatorNik',
-                style: const pw.TextStyle(fontSize: 16),
-              ),
-              pw.Text(
-                'Position: $creatorPosition',
-                style: const pw.TextStyle(fontSize: 16),
-              ),
-              pw.SizedBox(height: 20),
-              pw.Divider(),
-              pw.SizedBox(height: 20),
-
-              pw.Text(
-                'Approver:',
-                style: pw.TextStyle(
-                  fontWeight: pw.FontWeight.bold,
-                  fontSize: 16,
-                ),
-              ),
-              pw.Text(
-                'Name: $approverName',
-                style: const pw.TextStyle(fontSize: 16),
-              ),
-              pw.Text(
-                'NIK: ${approval?.nik ?? "N/A"}',
-                style: const pw.TextStyle(fontSize: 16),
-              ),
-              pw.Text(
-                'Position: SENIOR PROGRAMMER',
-                style: const pw.TextStyle(fontSize: 16),
-              ),
-
-              if (rejectionReason.isNotEmpty) ...[
                 pw.SizedBox(height: 20),
-                pw.Divider(),
-                pw.SizedBox(height: 20),
+
+                // **Section 1: Employee Table**
                 pw.Text(
-                  'Approver Comment:',
-                  style: pw.TextStyle(
+                  "I. Diperintahkan Kepada:",
+                  style: pw.TextStyle(fontSize: 12),
+                ),
+                pw.SizedBox(height: 8),
+                pw.Table.fromTextArray(
+                  headers: ["NO", "NIK", "NAMA"],
+                  data: detail.petugas!.asMap().entries.map((entry) {
+                    final index = entry.key + 1;
+                    final nik = entry.value; // raw NIK from petugas
+                    final name = _employeeNameForPdf(nik);
+                    return [index.toString(), nik, name];
+                  }).toList(),
+                  headerStyle: pw.TextStyle(
                     fontWeight: pw.FontWeight.bold,
-                    color: PdfColors.red700,
-                    fontSize: 16,
+                    fontSize: 10,
                   ),
+                  cellStyle: pw.TextStyle(fontSize: 10),
+                  border: pw.TableBorder.all(),
+                  cellAlignment: pw.Alignment.centerLeft,
                 ),
+                pw.SizedBox(height: 20),
+
+                // **Section 2: Task Description**
                 pw.Text(
-                  rejectionReason.isNotEmpty
-                      ? rejectionReason
-                      : "No comment provided.",
-                  style: pw.TextStyle(
-                    color: PdfColors.red,
-                    fontStyle: pw.FontStyle.italic,
-                    fontSize: 14,
-                  ),
+                  "II. Untuk Melaksanakan Tugas Sebagai Berikut:",
+                  style: pw.TextStyle(fontSize: 12),
+                ),
+                pw.SizedBox(height: 8),
+                pw.Bullet(
+                  text: duty.description ?? "Tidak ada deskripsi tugas",
+                  style: pw.TextStyle(fontSize: 10),
+                ),
+                pw.SizedBox(height: 20),
+
+                // **Section 3: Date & Time**
+                pw.Text(
+                  "III. Yang dilaksanakan pada:",
+                  style: pw.TextStyle(fontSize: 12),
+                ),
+                pw.SizedBox(height: 8),
+                pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Text(
+                      "1. Tanggal: ${_formatDate(duty.dutyDate.toIso8601String())}",
+                      style: pw.TextStyle(fontSize: 10),
+                    ),
+                    pw.Text(
+                      "2. Berangkat Jam: ${_formatTime(duty.startTime)}",
+                      style: pw.TextStyle(fontSize: 10),
+                    ),
+                    pw.Text(
+                      "3. Kembali Jam: ${_formatTime(duty.endTime)}",
+                      style: pw.TextStyle(fontSize: 10),
+                    ),
+                  ],
+                ),
+                pw.SizedBox(height: 20),
+
+                // **Section 4: Closing Statement**
+                pw.Text(
+                  "IV. Tugas tersebut supaya dilaksanakan dengan penuh rasa tanggung jawab "
+                  "dan melaporkan hasilnya kepada pejabat yang memerintahkan.",
+                  style: pw.TextStyle(fontSize: 12),
+                ),
+                pw.SizedBox(height: 20),
+
+                // Signatures
+                pw.Row(
+                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                  children: [
+                    // Approver Signature
+                    pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.center,
+                      children: [
+                        pw.Text(
+                          "Yang Menyetujui Tugas/Dinas",
+                          style: pw.TextStyle(fontSize: 12),
+                        ),
+                        pw.SizedBox(height: 40),
+                        pw.Text(
+                          approverName,
+                          style: pw.TextStyle(
+                            fontSize: 12,
+                            fontWeight: pw.FontWeight.bold,
+                          ),
+                        ),
+                        // Example static position
+                        pw.Text(
+                          "(SENIOR PROGRAMMER)",
+                          style: pw.TextStyle(fontSize: 10),
+                        ),
+                      ],
+                    ),
+                    // Maker's (creator) Signature
+                    pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.center,
+                      children: [
+                        pw.Text(
+                          "Yang Melaksanakan,",
+                          style: pw.TextStyle(fontSize: 12),
+                        ),
+                        pw.Text(
+                          "Tugas/Dinas",
+                          style: pw.TextStyle(fontSize: 12),
+                        ),
+                        pw.SizedBox(height: 40),
+
+                        // Maker name
+                        pw.Text(
+                          user.nama ?? "Unknown",
+                          style: pw.TextStyle(
+                            fontSize: 12,
+                            fontWeight: pw.FontWeight.bold,
+                          ),
+                        ),
+                        // ADDED: Maker's position under signature
+                        pw.Text(
+                          "(${user.jabatan ?? "Unknown Position"})",
+                          style: const pw.TextStyle(fontSize: 10),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+
+                // Footer
+                pw.SizedBox(height: 20),
+                pw.Text(
+                  "Dengan Motor / Mobil No.: Mobil/Motor",
+                  style: pw.TextStyle(fontSize: 10),
                 ),
               ],
-            ],
-          ),
-        ),
+            ),
+          );
+        },
       ),
     );
 
@@ -396,25 +477,31 @@ class _DutyDetailScreenState extends State<DutyDetailScreen> {
   }
 
   // ------------------- HELPER METHODS -------------------
-  /// Looks up by stripped key first, then fallback.  
+  /// Same logic for the detail UI employees
   String _getEmployeeName(String rawNik, Map<String, String> detailMap) {
     final strippedNik = rawNik.replaceFirst(RegExp(r'^0+'), '');
-    final fromDetail = detailMap[strippedNik];
+    // Check the detailMap
+    final fromDetail = detailMap[strippedNik] ?? detailMap[rawNik];
     if (fromDetail != null) return fromDetail;
 
-    // fallback
-    final fromGlobal = _employeesMap[strippedNik];
+    // fallback to _employeesMap
+    final fromGlobal = _employeesMap[strippedNik] ?? _employeesMap[rawNik];
     return fromGlobal ?? "Unknown Employee";
   }
 
-  String _getApproverName(String approverNik, Map<String, String> approverList) {
-    return approverList[approverNik] ?? "Unknown";
+  /// Same logic for the detail UI approver
+  String _getApproverName(String rawNik, Map<String, String> approverList) {
+    final strippedNik = rawNik.replaceFirst(RegExp(r'^0+'), '');
+    final fromDetail = approverList[strippedNik] ?? approverList[rawNik];
+    if (fromDetail != null) return fromDetail;
+
+    final fromGlobal = _employeesMap[strippedNik] ?? _employeesMap[rawNik];
+    return fromGlobal ?? "Unknown";
   }
 
-  /// Submit an approval action (approve/reject/return) with optional komentar
+  /// Submit an approval action
   Future<void> _onSubmitApproval(Duty duty, DutyStatus newStatus) async {
     final komentarController = TextEditingController();
-
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -457,7 +544,6 @@ class _DutyDetailScreenState extends State<DutyDetailScreen> {
                 final user = await _authService.loadUserInfo();
                 if (!mounted) return;
 
-                // Submit the chosen status
                 await _apiService.submitApproval(
                   duty.id,
                   newStatus,
@@ -479,7 +565,6 @@ class _DutyDetailScreenState extends State<DutyDetailScreen> {
                   ),
                 );
 
-                // Refresh the detail screen
                 if (!mounted) return;
                 setState(() {
                   _dutyDetailDataFuture = fetchDutyDetailData(duty.id);
@@ -507,7 +592,7 @@ class _DutyDetailScreenState extends State<DutyDetailScreen> {
     );
   }
 
-  /// Format times like "09:00"
+  // Time formatting
   String _formatTime(String time) {
     try {
       final parsedTime = DateTime.parse("1970-01-01T$time");
@@ -517,7 +602,7 @@ class _DutyDetailScreenState extends State<DutyDetailScreen> {
     }
   }
 
-  /// Format date as dd-MM-yyyy
+  // Date formatting
   String _formatDate(String date) {
     try {
       final parsedDate = DateTime.parse(date);
@@ -527,7 +612,7 @@ class _DutyDetailScreenState extends State<DutyDetailScreen> {
     }
   }
 
-  /// Format dateTime as "MMM dd, yyyy hh:mm a"
+  // DateTime formatting
   String _formatDateTime(DateTime dateTime) {
     try {
       return DateFormat('MMM dd, yyyy hh:mm a').format(dateTime);
@@ -537,9 +622,8 @@ class _DutyDetailScreenState extends State<DutyDetailScreen> {
   }
 
   String capitalize(String s) {
-    return s.isNotEmpty
-        ? s[0].toUpperCase() + s.substring(1).toLowerCase()
-        : s;
+    if (s.isEmpty) return s;
+    return s[0].toUpperCase() + s.substring(1).toLowerCase();
   }
 
   // ------------------- UI BUILD -------------------
@@ -701,9 +785,10 @@ class _DutyDetailScreenState extends State<DutyDetailScreen> {
     final creatorNik = user.nik;
     final creatorPosition = user.jabatan ?? "Unknown Position";
 
+    // Approver
     final approverName = (approval != null)
         ? _getApproverName(approval.nik, dutyDetail.approverList)
-        : "Unknown";
+        : "Unknown Approver";
 
     // The "komentar" from approver
     final approverComment = approval?.note ?? "";
@@ -733,7 +818,7 @@ class _DutyDetailScreenState extends State<DutyDetailScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Layout for top section
+                // Top section
                 LayoutBuilder(
                   builder: (context, constraints) {
                     if (constraints.maxWidth > 500) {
@@ -763,7 +848,6 @@ class _DutyDetailScreenState extends State<DutyDetailScreen> {
                                   style: const TextStyle(fontSize: 16),
                                 ),
                                 const SizedBox(height: 10),
-                                // Employees on duty
                                 _buildPetugasSection(dutyDetail),
                               ],
                             ),
@@ -824,7 +908,6 @@ class _DutyDetailScreenState extends State<DutyDetailScreen> {
                             style: const TextStyle(fontSize: 16),
                           ),
                           const SizedBox(height: 10),
-                          // Employees on duty
                           _buildPetugasSection(dutyDetail),
                           const SizedBox(height: 20),
                           Text(
@@ -920,7 +1003,6 @@ class _DutyDetailScreenState extends State<DutyDetailScreen> {
                   style: TextStyle(fontSize: 16),
                 ),
 
-                // Approver Comment (used for any action: reject, approve, or return)
                 const SizedBox(height: 16),
                 const Divider(),
                 Text(
@@ -938,7 +1020,6 @@ class _DutyDetailScreenState extends State<DutyDetailScreen> {
                       : "No comment provided.",
                   style: const TextStyle(fontSize: 14),
                 ),
-
                 const SizedBox(height: 20),
                 const Divider(),
                 const SizedBox(height: 20),
@@ -952,7 +1033,7 @@ class _DutyDetailScreenState extends State<DutyDetailScreen> {
                         isWaiting: isWaiting,
                         isApproved: isApproved,
                         isRejected: isRejected,
-                        rejectionReason: approverComment, // Possibly used if needed
+                        rejectionReason: approverComment,
                         dutyDetailData: DutyDetailData(
                           user: user,
                           dutyDetail: dutyDetail,
@@ -967,7 +1048,7 @@ class _DutyDetailScreenState extends State<DutyDetailScreen> {
     );
   }
 
-  // ------------------- BUILD PETUGAS SECTION -------------------
+  // ------------------- BUILD PETUGAS SECTION (UI) -------------------
   Widget _buildPetugasSection(GetDutyDetail dutyDetail) {
     if (dutyDetail.petugas == null || dutyDetail.petugas!.isEmpty) {
       return const SizedBox();
@@ -978,10 +1059,11 @@ class _DutyDetailScreenState extends State<DutyDetailScreen> {
       final rawNik = dutyDetail.petugas![i];
       final strippedNik = rawNik.replaceFirst(RegExp(r'^0+'), '');
 
-      // 1) Lookup in the detail's employeeList
-      final detailName = dutyDetail.employeeList[strippedNik];
-      // 2) If null, fallback to the globally fetched _employeesMap
-      final fallbackName = _employeesMap[strippedNik];
+      // Same logic used above
+      final detailName =
+          dutyDetail.employeeList[strippedNik] ?? dutyDetail.employeeList[rawNik];
+      final fallbackName =
+          _employeesMap[strippedNik] ?? _employeesMap[rawNik];
       final name = detailName ?? fallbackName ?? "Unknown Employee";
 
       petugasWidgets.add(
@@ -1182,7 +1264,7 @@ class _DutyDetailScreenState extends State<DutyDetailScreen> {
             onPressed: () => _onPrint(dutyDetailData),
           ),
           const SizedBox(height: 10),
-          // Already showing Approver Comment above
+          // Approver Comment is already shown above
         ],
       );
     } else {
