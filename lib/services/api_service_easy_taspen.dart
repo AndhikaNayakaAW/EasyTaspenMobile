@@ -1,4 +1,5 @@
 // lib/services/api_service_easy_taspen.dart
+
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:mobileapp/dto/base_response.dart';
@@ -190,7 +191,8 @@ class ApiService {
           }
           return dataEdit;
         } else {
-          final msg = responseBodyEdit['metadata']?['message'] ?? 'Unknown error.';
+          final msg =
+              responseBodyEdit['metadata']?['message'] ?? 'Unknown error.';
           throw Exception('Failed to fetch duty: $msg');
         }
       } else {
@@ -422,7 +424,8 @@ class ApiService {
             finalEmployeeMap[originalKey.toString()] = name;
 
             // Also store a stripped version (leading zeros removed)
-            final stripped = originalKey.toString().replaceFirst(RegExp(r'^0+'), '');
+            final stripped =
+                originalKey.toString().replaceFirst(RegExp(r'^0+'), '');
             // Only store if it's not the same as the original
             if (stripped.isNotEmpty && stripped != originalKey) {
               finalEmployeeMap[stripped] = name;
@@ -444,11 +447,13 @@ class ApiService {
   }
 
   // ------------------- SUBMIT APPROVAL -------------------
-  /// This handles both approval (code = 2) **and** rejection (code = 5).
-  /// If [status] == DutyStatus.rejected, code=5 => `submit=5` => reject.
-  /// If [status] == DutyStatus.approved, code=2 => `submit=2` => approve.
-  /// If you have a "return" or "waiting" code, those can be used similarly.
-  Future<BaseResponse<Map<String, dynamic>>> submitApproval(
+  /// Perbaikan: Mengembalikan `BaseResponse<String>` karena API mengembalikan
+  /// pesan berbentuk string (misalnya: "SPT berhasil diproses!").
+  /// 
+  /// - [status] == DutyStatus.rejected => code=5 => `submit=5` => reject.
+  /// - [status] == DutyStatus.approved => code=2 => `submit=2` => approve.
+  /// - "return" atau "waiting" code juga bisa diolah serupa.
+  Future<BaseResponse<String>> submitApproval(
     int dutyId,
     DutyStatus status,
     User user,
@@ -474,12 +479,15 @@ class ApiService {
       );
 
       final dynamic decoded = json.decode(response.body);
+
+      // Pastikan response adalah JSON object
       if (response.statusCode == 200 && decoded is Map<String, dynamic>) {
         if (decoded['metadata']['code'] == 200) {
-          // "Success" => "SPT berhasil diproses!" possibly
-          return BaseResponse<Map<String, dynamic>>.fromJson(
+          // Jika "SPT berhasil diproses!" hanya string,
+          // kita kembalikan sebagai BaseResponse<String>.
+          return BaseResponse<String>.fromJson(
             decoded,
-            (data) => data as Map<String, dynamic>,
+            (data) => data.toString(), // paksa 'response' jadi string
           );
         } else {
           final errorMessage = decoded['metadata']['message'] ??

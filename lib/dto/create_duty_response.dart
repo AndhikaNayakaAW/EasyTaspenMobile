@@ -1,3 +1,4 @@
+//lib/dto/create_duty_response.dart
 class CreateDutyResponse {
   final Map<String, String> employee;
   final Map<String, String> approver;
